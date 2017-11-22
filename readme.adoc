@@ -2,6 +2,7 @@
 
 This project is used to demonstrate how to use rollback/commit and ErrorHandler within transactional camel route.
 
+Detailed explanation is in Japanese only, and can be found at  link:https://github.com/jian-feng/restdsl-sql-sample3/blob/master/description.adoc[description.adoc].
 
 == To prepare user, db and table
 

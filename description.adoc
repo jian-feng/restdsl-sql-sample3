@@ -60,7 +60,7 @@ markRollbackOnly=falseに指定すれば、rollbackが発生した事(org.apache
 
 == 実装サンプル
 
-実装の詳細は、ソース(link:URL[restdsl-sample.xml])の下記の部分をご参照ください。
+実装の詳細は、ソース(link:https://github.com/jian-feng/restdsl-sql-sample3[restdsl-sample.xml])の下記の部分をご参照ください。
 
 - route id="updateSample"
 - errorHandler id="myErrorHandler"
