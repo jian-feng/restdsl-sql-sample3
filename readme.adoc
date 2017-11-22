@@ -1,0 +1,61 @@
+= restdsl-sql-sample3
+
+This project is used to demonstrate how to use rollback/commit and ErrorHandler within transactional camel route.
+
+
+== To prepare user, db and table
+
+[source,sql]
+----
+create database testdb;
+GRANT ALL PRIVILEGES ON testdb.* TO 'test'@'%' IDENTIFIED BY 'test';
+GRANT ALL PRIVILEGES ON testdb.* TO 'test'@'localhost' IDENTIFIED BY 'test';
+use testdb;
+
+CREATE TABLE demo
+(
+id INTEGER,
+name TEXT,
+datetime DATETIME,
+PRIMARY KEY (id)
+) COMMENT='this is my test table';
+----
+
+== To run the project
+
+execute the following Maven goal
+
+`mvn camel:run`
+
+== RESTクライアントの実行例
+* HTTP POST - createSample
+
+createSampleは、Body(HashMap)のidをSQL内でInsert部で使用します。
+
+[source,shell]
+----
+curl -X POST -H 'Content-type: application/json' -d '{"id":"2"}' localhost:9000/private-api/v1/sample
+----
+
+* HTTP PUT - updateSample
+
+updateSampleは、Body(HashMap)のidをSQL内でUpdateで使用しますが、
+Process2のExceptionによって、ロールバックされることを確認する目的です。
+
+[source,sh]
+----
+curl -X PUT -H 'Content-type: application/json' -d '{"id":"2"}' localhost:9000/private-api/v1/sample
+----
+
+=== 実行結果
+
+ログには以下のように出力されます。
+
+[source,text]
+----
+updateSample                   INFO  Excec updateSample 2
+updateSample                   INFO  Catch Exception of java.lang.RuntimeException: this is for rollback test.
+DeadLetterChannel              WARN  Rollback (MessageId: ID-JFENG-MP-64075-1507111792224-0-2 …
+CommonErrorHandler             ERROR Exchange[Id: ID-JFENG-MP-64075-1507111792224-0-1 …
+CommonErrorHandler             INFO  This is CommonErrorHandler: body={id=2}
+----

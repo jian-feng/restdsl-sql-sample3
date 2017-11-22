@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<blueprint xmlns="http://www.osgi.org/xmlns/blueprint/v1.0.0"
+    xmlns:cm="http://aries.apache.org/blueprint/xmlns/blueprint-cm/v1.0.0"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.osgi.org/xmlns/blueprint/v1.0.0 https://www.osgi.org/xmlns/blueprint/v1.0.0/blueprint.xsd                            http://camel.apache.org/schema/blueprint http://camel.apache.org/schema/blueprint/camel-blueprint.xsd http://aries.apache.org/blueprint/xmlns/blueprint-cm/v1.0.0 http://aries.apache.org/schemas/blueprint-cm/blueprint-cm-1.0.0.xsd">
+    <!-- 実行時は、プロパティファイル fuse/etc/testdb.cfg から読込も可能 -->
+    <!-- cfgが存在しなければ、下記の値が適用されます。 -->
+    <cm:property-placeholder id="fuse-property.placeholder" persistent-id="testdb">
+        <cm:default-properties>
+            <!-- for MariaDB -->
+            <cm:property name="jdbc.driverClassName" value="org.mariadb.jdbc.Driver"/>
+            <cm:property name="jdbc.url" value="jdbc:mariadb://localhost:32771/testdb"/>
+            <cm:property name="jdbc.username" value="test"/>
+            <cm:property name="jdbc.password" value="test"/>
+        </cm:default-properties>
+    </cm:property-placeholder>
+    <!-- ************************************ -->
+    <!-- bean of JDBC data source -->
+    <!-- ************************************ -->
+    <bean class="org.apache.commons.dbcp.BasicDataSource"
+        destroy-method="close" id="ds_testdb">
+        <property name="driverClassName" value="${jdbc.driverClassName}"/>
+        <property name="url" value="${jdbc.url}"/>
+        <property name="username" value="${jdbc.username}"/>
+        <property name="password" value="${jdbc.password}"/>
+        <property name="maxActive" value="10"/>
+        <property name="poolPreparedStatements" value="true"/>
+    </bean>
+    <bean
+        class="org.springframework.jdbc.datasource.DataSourceTransactionManager" id="jdbcTxManager">
+        <property name="dataSource" ref="ds_testdb"/>
+    </bean>
+    <!-- PROCESS -->
+    <bean class="local.sample.process.CreateSelectSQL" id="Process1"/>
+    <bean class="local.sample.process.Process2" id="Process2"/>
+    <!-- ************************************ -->
+    <!-- CamelContext -->
+    <!-- ************************************ -->
+    <camelContext id="restdsl-sample" trace="false" xmlns="http://camel.apache.org/schema/blueprint">
+        <errorHandler id="myErrorHandler" deadLetterUri="direct:CommonErrorHandler" type="DeadLetterChannel">
+            <redeliveryPolicy allowRedeliveryWhileStopping="false"
+                maximumRedeliveries="10" redeliveryDelay="1" retryAttemptedLogLevel="WARN"/>
+        </errorHandler>
+        <!-- ============== REST DSL ============== -->
+        <restConfiguration bindingMode="json" component="jetty"
+            host="0.0.0.0" port="9000">
+            <dataFormatProperty key="prettyPrint" value="true"/>
+        </restConfiguration>
+        <rest path="/private-api/v1">
+            <get uri="/sample/{zip}">
+                <to id="call-readSample" uri="direct:readSample"/>
+            </get>
+            <post consumes="applicatoin/json"
+                produces="applicatoin/json" uri="/sample">
+                <to uri="direct:createSample"/>
+            </post>
+            <put consumes="applicatoin/json" produces="applicatoin/json" uri="/sample">
+                <to uri="direct:updateSample"/>
+            </put>
+        </rest>
+        <!-- ============== BUISINESS ============== -->
+        <!-- readSampleは、URLパラメータのzipをSQL内でWHERE句で使用します。 -->
+        <route id="readSample">
+            <from id="readSample_from" uri="direct:readSample"/>
+            <process id="readSample_process1" ref="Process1"/>
+            <log id="readSample_log1" message="Excec readSample sql=${body}"/>
+            <to id="readSample_to" uri="sql:query?dataSource=ds_testdb&amp;useMessageBodyForSql=true"/>
+        </route>
+        <!-- createSampleは、Body(HashMap)のidをSQL内でInsert部で使用します。 -->
+        <route id="createSample">
+            <from id="createSample_from" uri="direct:createSample"/>
+            <transacted id="_transacted1"/>
+            <log id="createSample_log1" message="Excec createSample id=${body[id]}"/>
+            <to id="createSample_to1" uri="sql:classpath:sql/insertDemo.sql?dataSource=ds_testdb"/>
+        </route>
+        <!-- updateSampleは、Body(HashMap)のidをSQL内でUpdateで使用しますが、 -->
+        <!-- Process2のExceptionによって、ロールバックされることを確認する目的です。 -->
+        <route id="updateSample" errorHandlerRef="myErrorHandler">
+            <from id="updateSample_from" uri="direct:updateSample"/>
+            <transacted id="_transacted2"/>
+            <doTry id="_doTry1">
+                <log id="updateSample_log1" message="Excec updateSample ${body[id]}"/>
+                <to id="updateSample_to1" uri="sql:classpath:sql/updateDemo.sql?dataSource=ds_testdb"/>
+                <process id="_process2" ref="Process2"/>
+                <doCatch id="_doCatch1">
+                    <exception>java.lang.Exception</exception>
+                    <log id="_log1" message="Catch Exception of ${exception}"/>
+                    <rollback id="_rollback1" markRollbackOnly="false"/>
+                </doCatch>
+            </doTry>
+        </route>
+        <route id="CommonErrorHandler">
+            <from id="_from1" uri="direct:CommonErrorHandler"/>
+            <to id="_to1" uri="log:CommonErrorHandler?level=ERROR&amp;showAll=true"/>
+            <log id="CommonErrorHandler_log1" message="This is CommonErrorHandler: body=${body}"/>
+        </route>
+    </camelContext>
+</blueprint>

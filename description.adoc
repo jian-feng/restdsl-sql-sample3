@@ -1,0 +1,141 @@
+:source-highlighter: pygments
+:toc:
+:sectnums:
+:icons: font
+
+= transactionのerrorHandlingに関して
+
+== 背景
+
+camelContextのrouteでtransactionおよびrollbackを定義すると、
+既存実装のErrorHandler(DeadLetterChannel)とTransactionErrorHandlerの組み合わせが上手くいかないです。
+
+また、onExceptionを用いて直接ErrorResponseExceptionHandlerを呼びその後明示的にrollbackをすると両立が可能なのですが、ErrorHandlerの優先順位としてonException > CommonErrorHandlerであると考えられるため、
+rollbackをした後にCommonErrorHandlerを呼べるような実装は何か考えられますでしょうか。
+
+== 解決方法
+
+
+１）rollback呼び出す場所
+
+"onExceptionを用いて明示的にrollbackをする"のは適切ではないと考えます。
+
+"onException"はCamelContextレベルのエラーハンドリングです。
+一方で、rollbackはRoute内で開始したトランザクションに対するエラーハンドリングです。
+その為、下記のように、rollbackはRoute内(即ちトランザクション範囲内)でdoTry/doCatchを使って使用した方が自然です。
+
+[source,xml]
+----
+<route … >
+    <…>
+    <transacted id="_transacted2"/>
+    <doTry id="_doTry1">
+        <to uri="sql:classpath:sql/updateDemo.sql?dataSource=ds_testdb"/>
+        <process ref="Process2"/>
+        <doCatch id="_doCatch1">
+            <exception>java.lang.Exception</exception>
+            <log id="_log1" message="Catch Exception of ${exception}"/>
+            <rollback id="_rollback1" markRollbackOnly="false"/>
+        </doCatch>
+    </doTry>
+</route>
+----
+
+２）rollbackをした後にCommonErrorHandlerを呼べるような実装について
+
+rollbackの属性markRollbackOnly=trueに指定の場合、rollbackが発生した事(Exception)を通知せず、rollbackします。
+markRollbackOnly=falseに指定すれば、rollbackが発生した事(org.apache.camel.RollbackExchangeException)がエラーハンドラ−に通知され、エラーハンドラの処理に委任されます。
+
+[source,xml]
+----
+<rollback id="_rollback1" markRollbackOnly="false"/>
+----
+
+更に、Routeにてエラーハンドラを明記し、エラーハンドラ内でCommonErrorHandlerを呼べるような実装すれば、rollbackをした後にCommonErrorHandlerを呼べるようになります。
+
+[source,xml]
+----
+<route ... errorHandlerRef="myErrorHandler">
+----
+
+== 実装サンプル
+
+実装の詳細は、ソース(link:URL[restdsl-sample.xml])の下記の部分をご参照ください。
+
+- route id="updateSample"
+- errorHandler id="myErrorHandler"
+- route id="CommonErrorHandler"
+
+== 実装サンプルの動作確認
+
+下記の実行方法で実行すると、
+Route updateSample内のProcess2のExceptionによって、ロールバックされることを確認できます。
+ログには以下のように出力されます。
+
+[source,text]
+----
+updateSample                   INFO  Excec updateSample 2
+updateSample                   INFO  Catch Exception of java.lang.RuntimeException: this is for rollback test.
+DeadLetterChannel              WARN  Rollback (MessageId: ID-JFENG-MP-64075-1507111792224-0-2 …
+CommonErrorHandler             ERROR Exchange[Id: ID-JFENG-MP-64075-1507111792224-0-1 …
+CommonErrorHandler             INFO  This is CommonErrorHandler: body={id=2}
+----
+
+
+=== To prepare user, db and table
+
+[source,sql]
+----
+create database testdb;
+GRANT ALL PRIVILEGES ON testdb.* TO 'test'@'%' IDENTIFIED BY 'test';
+GRANT ALL PRIVILEGES ON testdb.* TO 'test'@'localhost' IDENTIFIED BY 'test';
+use testdb;
+
+CREATE TABLE demo
+(
+id INTEGER,
+name TEXT,
+datetime DATETIME,
+PRIMARY KEY (id)
+) COMMENT='this is my test table';
+----
+
+=== To run the project
+
+execute the following Maven goal
+
+`mvn camel:run`
+
+=== RESTクライアントの実行例
+* HTTP POST - createSample
+
+createSampleは、Body(HashMap)のidをSQL内でInsert部で使用します。
+
+[source,shell]
+----
+curl -X POST -H 'Content-type: application/json' -d '{"id":"2"}' localhost:9000/private-api/v1/sample
+----
+
+* HTTP PUT - updateSample
+
+updateSampleは、Body(HashMap)のidをSQL内でUpdateで使用しますが、
+Process2のExceptionによって、ロールバックされることを確認する目的です。
+
+[source,sh]
+----
+curl -X PUT -H 'Content-type: application/json' -d '{"id":"2"}' localhost:9000/private-api/v1/sample
+----
+
+=== 実行結果
+
+ログには以下のように出力されます。
+
+[source,text]
+----
+updateSample                   INFO  Excec updateSample 2
+updateSample                   INFO  Catch Exception of java.lang.RuntimeException: this is for rollback test.
+DeadLetterChannel              WARN  Rollback (MessageId: ID-JFENG-MP-64075-1507111792224-0-2 …
+CommonErrorHandler             ERROR Exchange[Id: ID-JFENG-MP-64075-1507111792224-0-1 …
+CommonErrorHandler             INFO  This is CommonErrorHandler: body={id=2}
+----
+
