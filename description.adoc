@@ -13,16 +13,33 @@ camelContextのrouteでtransactionおよびrollbackを定義すると、
 また、onExceptionを用いて直接ErrorResponseExceptionHandlerを呼びその後明示的にrollbackをすると両立が可能なのですが、ErrorHandlerの優先順位としてonException > CommonErrorHandlerであると考えられるため、
 rollbackをした後にCommonErrorHandlerを呼べるような実装は何か考えられますでしょうか。
 
+== 設計思想
+
+Camelのエラーハンドリングは以下の３つの仕組みが提供されています。
+
+ErrorHandler:: CamelContext、もしくはルートの例外をキャッチする。例外の内容に応じたキャッチができない。
+デフォルトで動作する例外処理機構。`onException` を併用することで例外の内容に応じてキャッチする内容を変更できる。
+
+onException:: CamelContext、もしくはルートの例外をキャッチする。例外の内容に応じてキャッチする内容を変更できる。
+
+doTry, doCatch, doFinally:: Javaのtry, catch, finallyと同様に、ルート内で例外をキャッチするスコープを設定できる。例外の内容に応じてキャッチする内容を変更できる。
+
+
+重要なポイントは、`ErrorHandler`（カスタムのErrorHandlerも含む）と `onException` が、基本的に、トランザクション外のリソースに対して補償（compensation）する仕組みであります。その為、`ErrorHandler` だけでは、トランザクションでrollbackできません。
+
+従いまして、トランザクションでカバーされている処理については、なるべく `doTry, doCatch, doFinally` を使って、これらの処理をcommit/rollbackできるように設計した方が良いです。
+
+
 == 解決方法
 
 
 １）rollback呼び出す場所
 
-"onExceptionを用いて明示的にrollbackをする"のは適切ではないと考えます。
+"onExceptionを用いて明示的にロールバックをする"のは適切ではないと考えます。
 
-"onException"はCamelContextレベルのエラーハンドリングです。
+前述のように、`onException` はロールバック用の仕組みではなく、CamelContextレベルのエラーハンドリングです。
 一方で、rollbackはRoute内で開始したトランザクションに対するエラーハンドリングです。
-その為、下記のように、rollbackはRoute内(即ちトランザクション範囲内)でdoTry/doCatchを使って使用した方が自然です。
+その為、下記のように、rollbackはRoute内(即ちトランザクション範囲内)で `doTry/doCatch` を使って使用した方が自然です。
 
 [source,xml]
 ----
